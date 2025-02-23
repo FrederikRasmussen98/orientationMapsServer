@@ -3,6 +3,8 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 from urllib.parse import urljoin, urlparse
+import schedule
+import time
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
@@ -23,6 +25,20 @@ def get_filename_from_headers(response):
         return sanitize_filename(filename)
     return None
 
+def track_downloaded_files(download_folder):
+    """Load previously downloaded filenames to avoid redundant downloads."""
+    downloaded_files_path = os.path.join(download_folder, "downloaded_files.txt")
+    if os.path.exists(downloaded_files_path):
+        with open(downloaded_files_path, "r") as file:
+            return set(file.read().splitlines())
+    return set()
+
+def save_downloaded_file(download_folder, filename):
+    """Save the name of the downloaded file to track it."""
+    downloaded_files_path = os.path.join(download_folder, "downloaded_files.txt")
+    with open(downloaded_files_path, "a") as file:
+        file.write(f"{filename}\n")
+
 def download_files(url):
     response = requests.get(url, headers=HEADERS)
     if response.status_code != 200:
@@ -42,10 +58,14 @@ def download_files(url):
     base_folder = "data"
     os.makedirs(base_folder, exist_ok=True)
 
-    # Create a dated subfolder
-    folder_name = datetime.now().strftime('%Y-%m-%d')
-    download_folder = os.path.join(base_folder, folder_name)
+    # Don't use dated subfolder, directly use 'data'
+    download_folder = base_folder
     os.makedirs(download_folder, exist_ok=True)
+
+    # Track previously downloaded files
+    downloaded_files = track_downloaded_files(download_folder)
+
+    new_files_count = 0
 
     for download_link in download_links:
         if not download_link:
@@ -56,6 +76,10 @@ def download_files(url):
         # Extract filename from URL
         parsed_url = urlparse(file_url)
         original_filename = os.path.basename(parsed_url.path) or "download.pdf"
+
+        # Skip if file has already been downloaded
+        if original_filename in downloaded_files:
+            continue
 
         # Request file to check headers
         file_response = requests.get(file_url, headers=HEADERS, stream=True)
@@ -73,8 +97,22 @@ def download_files(url):
             for chunk in file_response.iter_content(1024):
                 file.write(chunk)
 
+        # Save the filename to track it
+        save_downloaded_file(download_folder, final_filename)
+
+        new_files_count += 1
         print(f"Downloaded: {file_path}")
 
-if __name__ == "__main__":
+    # Output state with number of new files
+    print(f"Current date: {datetime.now().strftime('%Y-%m-%d')} - Files downloaded: {new_files_count}")
+
+def job():
     url = "https://okpan.dk/2018/event/aabent-orienteringsloeb-paa-faste-poster/"
     download_files(url)
+
+# Schedule the job to run every day at 08:00
+schedule.every().day.at("08:00").do(job)
+
+while True:
+    schedule.run_pending()
+    time.sleep(60)  # Check every minute to run the scheduled job
